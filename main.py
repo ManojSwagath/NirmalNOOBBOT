@@ -24,15 +24,26 @@
 =============================================================================
 """
 
+import os
+import platform
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections import deque
 
+from dotenv import load_dotenv
+load_dotenv()   # reads .env into os.environ before anything else
+
 import cv2
-import pyttsx3
 import speech_recognition as sr
 from fer.fer import FER
+from groq import Groq
+
+IS_WINDOWS = platform.system() == "Windows"
+if IS_WINDOWS:
+    import win32com.client as wincl
 
 # ──────────────────────────────────────────────────────────────
 # 1.  CONFIGURATION  — tweak these constants freely
@@ -41,13 +52,16 @@ from fer.fer import FER
 CAMERA_INDEX      = 0          # 0 = default webcam
 FRAME_WIDTH       = 640        # Lower to 320 on Raspberry Pi for speed
 FRAME_HEIGHT      = 480        # Lower to 240 on Raspberry Pi for speed
-ANALYSE_EVERY_N   = 10         # Run emotion model every Nth frame (saves CPU)
-STABLE_COUNT      = 3          # Require N consecutive same-emotion reads before speaking
+ANALYSE_EVERY_N   = 5          # Run emotion model every Nth frame (saves CPU)
+STABLE_COUNT      = 2          # Require N consecutive same-emotion reads before speaking
+MIN_CONFIDENCE    = 0.50       # Ignore detections below this confidence (0–1)
 TTS_RATE          = 160        # Words-per-minute for the speech engine
 WINDOW_NAME       = "Empathetic AI Companion"
-CONVERSATION_LIMIT = 5         # Max back-and-forth messages per emotion
+CONVERSATION_LIMIT = 5         # Max back-and-forth exchanges per emotion session
 LISTEN_TIMEOUT    = 5          # Seconds to wait for speech
 PHRASE_TIME_LIMIT = 8          # Max seconds of a single phrase
+GROQ_MODEL        = "llama-3.1-8b-instant"   # Groq's fastest model (~300 ms latency)
+WHISPER_MODEL     = "whisper-large-v3-turbo"  # Groq Whisper for speech-to-text
 
 # ──────────────────────────────────────────────────────────────
 # 2.  EMOTION → RESPONSE TEMPLATES
@@ -69,43 +83,57 @@ EMOTION_COLOURS = {
 # Only track these three emotions
 TRACKED_EMOTIONS = set(EMOTION_RESPONSES.keys())
 
-# Conversation follow-up responses based on emotion + keywords
-CONVERSATION_RESPONSES = {
-    "happy": {
-        "default": [
-            "That's wonderful! What made your day so great?",
-            "I love hearing that! Tell me more!",
-            "Your happiness is contagious! What's the good news?",
-            "That sounds amazing! Keep that energy going!",
-            "I'm so glad to hear that! You deserve it!",
-        ],
-    },
-    "sad": {
-        "default": [
-            "I understand. It's okay to feel this way. Want to talk about it?",
-            "I'm here for you. Sometimes talking helps. What happened?",
-            "Take your time. I'm listening whenever you're ready.",
-            "You're not alone in this. I care about how you feel.",
-            "It's okay to have tough days. Tomorrow can be better.",
-        ],
-    },
-    "angry": {
-        "default": [
-            "I hear you. What's bothering you? Let it out.",
-            "That sounds frustrating. Take a deep breath with me.",
-            "It's okay to feel angry. What happened?",
-            "I understand your frustration. Let's work through it.",
-            "You have every right to feel that way. I'm here to listen.",
-        ],
-    },
-}
+# System prompt template sent to Groq for each emotion session
+GROQ_SYSTEM_PROMPT = (
+    "You are a warm, empathetic AI companion. "
+    "The person in front of you appears to be feeling {emotion}. "
+    "Keep every response concise (1-2 sentences) and emotionally supportive. "
+    "End each reply with a caring follow-up question to keep the conversation going. "
+    "Do not repeat the emotion word excessively — just be naturally caring."
+)
 
 
 # ──────────────────────────────────────────────────────────────
-# 3.  EMOTION DETECTION  (FER — pretrained Keras CNN)
+# 3.  GROQ AI CLIENT
 # ──────────────────────────────────────────────────────────────
 
-def create_detector() -> FER:
+def create_groq_client() -> Groq:
+    """
+    Initialise the Groq API client.
+    Reads GROQ_API_KEY from the environment (set it before running):
+        Windows:  $env:GROQ_API_KEY = "gsk_..."
+        Linux:    export GROQ_API_KEY="gsk_..."
+    Get a free key at https://console.groq.com
+    """
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        print("[ERROR] GROQ_API_KEY environment variable is not set.")
+        print("        Get a free key at https://console.groq.com")
+        print("        Then run:  $env:GROQ_API_KEY = 'gsk_...'")
+        sys.exit(1)
+    return Groq(api_key=api_key)
+
+
+def get_groq_reply(client: Groq, history: list) -> str:
+    """Send the conversation history to Groq and return the reply text."""
+    try:
+        completion = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=history,
+            max_tokens=120,
+            temperature=0.75,
+        )
+        return completion.choices[0].message.content.strip()
+    except Exception as exc:
+        print(f"[WARN] Groq API error: {exc}")
+        return "I'm having a little trouble right now, but I'm still here for you."
+
+
+# ──────────────────────────────────────────────────────────────
+# 4.  EMOTION DETECTION  (FER — pretrained Keras CNN)
+# ──────────────────────────────────────────────────────────────
+
+def create_detector() -> FER:  # (section numbering shifted — Groq is now section 3)
     """
     Initialise the FER emotion detector.
 
@@ -148,57 +176,56 @@ def detect_emotion(frame, detector: FER) -> tuple:
 
 
 # ──────────────────────────────────────────────────────────────
-# 4.  TEXT-TO-SPEECH  (pyttsx3 — offline, cross-platform)
+# 4.  TEXT-TO-SPEECH  (SAPI5 on Windows • espeak-ng on Linux/Pi)
 # ──────────────────────────────────────────────────────────────
 
-def create_tts_engine() -> pyttsx3.Engine:
+def create_tts_engine():
     """
-    Create and configure a pyttsx3 TTS engine.
-    Uses SAPI5 on Windows, espeak-ng on Linux / Raspberry Pi.
+    Windows : SAPI5 via win32com  (Zira female voice, reliable from threads)
+    Linux/Pi: returns None — espeak-ng is called directly in speak_text()
     """
-    engine = pyttsx3.init()
-    engine.setProperty("rate", TTS_RATE)
-    # Optionally pick a different voice:
-    # voices = engine.getProperty("voices")
-    # engine.setProperty("voice", voices[1].id)   # e.g. index 1 = female
-    return engine
+    if IS_WINDOWS:
+        sapi = wincl.Dispatch("SAPI.SpVoice")
+        sapi.Rate = -1
+        voices = sapi.GetVoices()
+        for i in range(voices.Count):
+            v = voices.Item(i)
+            desc = v.GetDescription()
+            if "zira" in desc.lower():
+                sapi.Voice = v
+                print(f"[TTS]  Using voice: {desc}")
+                return sapi
+        print("[TTS]  Zira not found — using default Windows voice.")
+        return sapi
+    else:
+        # Linux / Raspberry Pi — verify espeak-ng is installed
+        result = subprocess.run(["which", "espeak-ng"], capture_output=True)
+        if result.returncode != 0:
+            print("[TTS]  espeak-ng not found. Run: sudo apt install espeak-ng")
+        else:
+            print("[TTS]  Using espeak-ng (en+f3 — female voice)")
+        return None  # Linux TTS is stateless — no engine object needed
 
 
-def speak_text(text: str, engine: pyttsx3.Engine):
-    """Speak text synchronously (call from threads only)."""
+def speak_text(text: str, tts):
+    """Speak text synchronously regardless of platform."""
     try:
-        engine.say(text)
-        engine.runAndWait()
+        if IS_WINDOWS:
+            tts.Speak(text)
+        else:
+            # espeak-ng: -s speed, -v voice (en+f3 = English female)
+            subprocess.run(
+                ["espeak-ng", "-s", "145", "-v", "en+f3", text],
+                check=True,
+            )
     except Exception as exc:
         print(f"[WARN] TTS error: {exc}")
 
 
-def speak_response(emotion: str, engine: pyttsx3.Engine, spoken_flag: dict):
-    """
-    Speak the empathetic response for *emotion* in a daemon thread
-    so the camera loop is never blocked.
-
-    *spoken_flag* is a mutable dict {"busy": bool} shared with the
-    main loop to prevent overlapping speech.
-    """
-    text = EMOTION_RESPONSES.get(emotion, "Hello! How are you?")
-
-    def _speak():
-        spoken_flag["busy"] = True
-        try:
-            engine.say(text)
-            engine.runAndWait()
-        except Exception as exc:
-            print(f"[WARN] TTS error: {exc}")
-        finally:
-            spoken_flag["busy"] = False
-
-    thread = threading.Thread(target=_speak, daemon=True)
-    thread.start()
 
 
 # ──────────────────────────────────────────────────────────────
-# 4b. SPEECH RECOGNITION  (Google free API via SpeechRecognition)
+# 4b. SPEECH RECOGNITION  (Groq Whisper — no flac.exe subprocess)
 # ──────────────────────────────────────────────────────────────
 
 def create_recognizer() -> sr.Recognizer:
@@ -208,80 +235,130 @@ def create_recognizer() -> sr.Recognizer:
     return recognizer
 
 
-def listen_for_speech(recognizer: sr.Recognizer) -> str | None:
+def listen_for_speech(recognizer: sr.Recognizer, groq_client: Groq) -> str | None:
     """
-    Listen to the microphone and return the transcribed text.
-    Returns None if nothing was heard or recognition failed.
+    Capture microphone audio and transcribe via Groq Whisper (WAV upload).
+    Avoids the flac.exe subprocess that causes PermissionError on Windows.
     """
     try:
         with sr.Microphone() as source:
             print("[LISTEN] Listening … (speak now)")
-            recognizer.adjust_for_ambient_noise(source, duration=0.5)
+            recognizer.adjust_for_ambient_noise(source, duration=0.3)
             audio = recognizer.listen(
                 source, timeout=LISTEN_TIMEOUT, phrase_time_limit=PHRASE_TIME_LIMIT
             )
-        print("[LISTEN] Processing speech …")
-        text = recognizer.recognize_google(audio)
-        print(f"[HEARD]  \"{text}\"")
-        return text
     except sr.WaitTimeoutError:
         print("[LISTEN] No speech detected (timeout).")
         return None
-    except sr.UnknownValueError:
-        print("[LISTEN] Could not understand the audio.")
+
+    tmp_path = None
+    try:
+        wav_bytes = audio.get_wav_data()
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp.write(wav_bytes)
+            tmp_path = tmp.name
+
+        print("[LISTEN] Transcribing with Groq Whisper …")
+        with open(tmp_path, "rb") as f:
+            result = groq_client.audio.transcriptions.create(
+                model="whisper-large-v3-turbo",
+                file=("audio.wav", f, "audio/wav"),
+            )
+        text = result.text.strip()
+        if text:
+            print(f"[HEARD]  \"{text}\"")
+            return text
         return None
-    except sr.RequestError as exc:
-        print(f"[WARN] Speech recognition service error: {exc}")
+
+    except Exception as exc:
+        print(f"[WARN] STT error: {exc}")
         return None
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 
 # ──────────────────────────────────────────────────────────────
-# 4c. CONVERSATION ENGINE
+# 4c. CONVERSATION ENGINE  (powered by Groq)
 # ──────────────────────────────────────────────────────────────
 
-def run_conversation(emotion: str, engine: pyttsx3.Engine,
-                     recognizer: sr.Recognizer, spoken_flag: dict):
+def run_conversation(emotion: str, sapi,
+                     recognizer: sr.Recognizer, spoken_flag: dict,
+                     groq_client: Groq):
     """
     Run a back-and-forth voice conversation in a background thread.
-    Starts after the initial emotion greeting, up to CONVERSATION_LIMIT exchanges.
+
+    Flow:
+      1. Speak the fixed emotion greeting immediately (no API latency).
+      2. After each user reply, send the full chat history to Groq
+         (llama-3.1-8b-instant, ~300 ms) and speak the contextual reply.
+      3. Repeat up to CONVERSATION_LIMIT exchanges.
     """
     def _converse():
+        # Windows only: COM must be initialised per-thread (SAPI is STA-based)
+        if IS_WINDOWS:
+            import pythoncom
+            pythoncom.CoInitialize()
+            thread_tts = wincl.Dispatch("SAPI.SpVoice")
+            thread_tts.Rate = -1
+            voices = thread_tts.GetVoices()
+            for i in range(voices.Count):
+                v = voices.Item(i)
+                if "zira" in v.GetDescription().lower():
+                    thread_tts.Voice = v
+                    break
+        else:
+            thread_tts = None  # Linux: speak_text() calls espeak-ng directly
+
         spoken_flag["busy"] = True
         try:
-            # Speak the initial emotion greeting
-            greeting = EMOTION_RESPONSES.get(emotion, "Hello! How are you?")
-            print(f'[SPEAK]   "{greeting}"')
-            speak_text(greeting, engine)
+            # Build the conversation history with a system prompt
+            history = [
+                {
+                    "role": "system",
+                    "content": GROQ_SYSTEM_PROMPT.format(emotion=emotion),
+                }
+            ]
 
-            responses = CONVERSATION_RESPONSES.get(emotion, {}).get("default", [])
+            # Speak the instant local greeting (zero API latency)
+            greeting = EMOTION_RESPONSES.get(emotion, "Hello! How are you?")
+            history.append({"role": "assistant", "content": greeting})
+            print(f'[SPEAK]   "{greeting}"')
+            speak_text(greeting, thread_tts)
+
             msg_count = 0
 
             while msg_count < CONVERSATION_LIMIT:
                 # Listen for user reply
-                user_text = listen_for_speech(recognizer)
+                user_text = listen_for_speech(recognizer, groq_client)
 
                 if user_text is None:
-                    # No speech detected — end conversation
-                    farewell = "It seems like you're quiet. I'm here whenever you want to talk!"
+                    farewell = "I'm here whenever you're ready to talk. Take care!"
                     print(f'[SPEAK]   "{farewell}"')
-                    speak_text(farewell, engine)
+                    speak_text(farewell, thread_tts)
                     break
 
                 msg_count += 1
+                history.append({"role": "user", "content": user_text})
+                print(f'[GROQ]    Fetching reply for: "{user_text}"')
+
+                # Get a contextual, dynamic reply from Groq
+                reply = get_groq_reply(groq_client, history)
+                history.append({"role": "assistant", "content": reply})
+                print(f'[SPEAK]   "{reply}"')
+                speak_text(reply, thread_tts)
 
                 if msg_count >= CONVERSATION_LIMIT:
-                    closing = "It was really nice talking to you! Take care and stay strong!"
+                    closing = "It was really nice talking with you! Take care and stay strong!"
                     print(f'[SPEAK]   "{closing}"')
-                    speak_text(closing, engine)
+                    speak_text(closing, thread_tts)
                     break
-
-                # Pick a response from the pool
-                reply = responses[msg_count % len(responses)]
-                print(f'[SPEAK]   "{reply}"')
-                speak_text(reply, engine)
 
         finally:
             spoken_flag["busy"] = False
+            if IS_WINDOWS:
+                import pythoncom
+                pythoncom.CoUninitialize()
             print("[CONVO] Conversation ended.")
 
     thread = threading.Thread(target=_converse, daemon=True)
@@ -367,8 +444,9 @@ def main():
         sys.exit(1)
 
     detector    = create_detector()
-    tts_engine  = create_tts_engine()
+    tts_sapi    = create_tts_engine()
     recognizer  = create_recognizer()
+    groq_client = create_groq_client()
 
     # --- State variables ---
     frame_count    = 0              # Total frames captured
@@ -399,8 +477,10 @@ def main():
                 emotion, box, scores = detect_emotion(frame, detector)
 
                 if emotion is not None:
-                    # Only react to tracked emotions
+                    # Skip weak detections and untracked emotions
                     if emotion not in TRACKED_EMOTIONS:
+                        continue
+                    if scores[emotion] < MIN_CONFIDENCE:
                         continue
                     current_emotion = emotion
                     current_box     = box
@@ -418,7 +498,7 @@ def main():
                     if (all_same
                             and emotion != last_spoken
                             and not spoken_flag["busy"]):
-                        run_conversation(emotion, tts_engine, recognizer, spoken_flag)
+                        run_conversation(emotion, tts_sapi, recognizer, spoken_flag, groq_client)
                         last_spoken = emotion
 
             # --- Draw overlay if we have a detection ---
@@ -440,7 +520,6 @@ def main():
         # --- Clean up ---
         cap.release()
         cv2.destroyAllWindows()
-        tts_engine.stop()
         print("[INFO] Camera released. Goodbye!")
 
 

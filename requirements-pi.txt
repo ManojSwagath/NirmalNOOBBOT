@@ -1,0 +1,37 @@
+# ============================================================
+# Empathetic AI Companion — Raspberry Pi 5 Dependencies
+# ============================================================
+# Run these apt commands FIRST before pip installing:
+#
+#   sudo apt update && sudo apt upgrade -y
+#   sudo apt install -y \
+#       python3-pip python3-venv \
+#       espeak-ng libespeak-ng1 \
+#       libatlas-base-dev libhdf5-dev \
+#       libgtk-3-dev libopencv-dev \
+#       portaudio19-dev python3-pyaudio \
+#       libjpeg-dev libpng-dev libtiff-dev \
+#       libcamera-apps
+#
+# Then:
+#   python3 -m venv venv
+#   source venv/bin/activate
+#   pip install -r requirements-pi.txt
+# ============================================================
+
+# --- Computer Vision ---
+opencv-python-headless>=4.8.0   # Headless build — lighter on Pi (no GTK deps)
+
+# --- Emotion Detection ---
+fer>=22.5.1                     # Pulls in tensorflow automatically
+
+# --- Speech Recognition ---
+SpeechRecognition>=3.10
+PyAudio>=0.2.14
+
+# --- Groq AI (LLM + Whisper STT) ---
+groq>=0.9.0
+python-dotenv>=1.0.0
+
+# --- Numerical ---
+numpy>=1.24

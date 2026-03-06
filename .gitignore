@@ -1,9 +1,24 @@
+# Virtual environments
+venv/
 .venv/
+
+# Python cache
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# Secrets — NEVER commit this
 .env
+
+# Build artifacts
 *.egg-info/
 dist/
 build/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary audio files created during speech recognition
+*.wav

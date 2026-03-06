@@ -21,5 +21,9 @@ pyttsx3>=2.98                   # Cross-platform TTS (SAPI5 on Windows, espeak o
 SpeechRecognition>=3.10         # Microphone input → text (uses Google free API)
 PyAudio>=0.2.14                 # Microphone access for SpeechRecognition
 
+# --- Groq AI API (fast LLM for empathetic conversation) ---
+groq>=0.9.0                     # Groq Python client
+python-dotenv>=1.0.0            # Loads GROQ_API_KEY from .env file automatically
+
 # --- Numerical (auto-installed by opencv/tensorflow, pinned for clarity) ---
 numpy>=1.24
