@@ -26,7 +26,10 @@ opencv-python>=4.8.0            # Full build — needed for cv2.imshow with moni
 fer>=22.5.1                     # Pulls in tensorflow automatically
 
 # --- Face Geometry ---
-mediapipe>=0.10.9               # Tasks API FaceLandmarker
+# mediapipe — NOT available on aarch64/Pi (no official wheel).
+# The app auto-detects this and runs in FER-only mode.
+# If a community wheel becomes available, install it manually:
+#   pip install mediapipe
 
 # --- Speech Recognition ---
 SpeechRecognition>=3.10

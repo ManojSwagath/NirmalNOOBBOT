@@ -34,9 +34,13 @@ import cv2
 import os
 import urllib.request
 import numpy as np
-import mediapipe as mp
-from mediapipe.tasks import python as mp_python
-from mediapipe.tasks.python import vision as mp_vision
+try:
+    import mediapipe as mp
+    from mediapipe.tasks import python as mp_python
+    from mediapipe.tasks.python import vision as mp_vision
+    _HAS_MEDIAPIPE = True
+except ImportError:
+    _HAS_MEDIAPIPE = False
 from collections import deque
 from fer.fer import FER
 from config import EMOTION_BUFFER_SIZE, STABLE_FRAMES, MIN_CONFIDENCE, MEMORY_DATA_DIR
@@ -48,8 +52,11 @@ _MODEL_URL  = (
     "face_landmarker/face_landmarker/float16/1/face_landmarker.task"
 )
 
-def _ensure_model() -> str:
-    """Download the face landmark model on first run, then return its path."""
+def _ensure_model() -> str | None:
+    """Download the face landmark model on first run, then return its path.
+    Returns None when mediapipe is not available."""
+    if not _HAS_MEDIAPIPE:
+        return None
     if not os.path.exists(_MODEL_PATH):
         print("[DETECTOR] Downloading face landmark model (~30 MB)…")
         urllib.request.urlretrieve(_MODEL_URL, _MODEL_PATH)
@@ -140,18 +147,23 @@ class EmotionDetector:
         self._stable_frames = stable_frames
         self._min_conf      = min_confidence
 
-        print("[DETECTOR] Loading MediaPipe FaceLandmarker…")
-        model_path  = _ensure_model()
-        base_opts   = mp_python.BaseOptions(model_asset_path=model_path)
-        lm_opts     = mp_vision.FaceLandmarkerOptions(
-            base_options=base_opts,
-            running_mode=mp_vision.RunningMode.IMAGE,
-            num_faces=1,
-            min_face_detection_confidence=0.5,
-            min_face_presence_confidence=0.5,
-            min_tracking_confidence=0.5,
-        )
-        self._face_landmarker = mp_vision.FaceLandmarker.create_from_options(lm_opts)
+        # ── MediaPipe (optional — not available on aarch64/Pi) ────────────────
+        self._face_landmarker = None
+        model_path = _ensure_model()
+        if _HAS_MEDIAPIPE and model_path:
+            print("[DETECTOR] Loading MediaPipe FaceLandmarker…")
+            base_opts   = mp_python.BaseOptions(model_asset_path=model_path)
+            lm_opts     = mp_vision.FaceLandmarkerOptions(
+                base_options=base_opts,
+                running_mode=mp_vision.RunningMode.IMAGE,
+                num_faces=1,
+                min_face_detection_confidence=0.5,
+                min_face_presence_confidence=0.5,
+                min_tracking_confidence=0.5,
+            )
+            self._face_landmarker = mp_vision.FaceLandmarker.create_from_options(lm_opts)
+        else:
+            print("[DETECTOR] MediaPipe not available — running FER-only mode")
 
         self._score_bufs: dict[str, deque] = {
             e: deque(maxlen=buffer_size) for e in EMOTION_GROUPS
@@ -471,20 +483,25 @@ class EmotionDetector:
         box     = top["box"]
         fer_g   = self._group_fer(top["emotions"])
 
-        # ── Signal 2: MediaPipe FaceLandmarker ───────────────────────────────
-        rgb      = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        lm_result = self._face_landmarker.detect(mp_image)
-        if lm_result.face_landmarks:
-            lm   = lm_result.face_landmarks[0]   # list of NormalizedLandmark
-            lm_s = self._landmark_scores(lm)
-            fused = {
-                e: _FUSION_W[e][0] * fer_g[e] + _FUSION_W[e][1] * lm_s[e]
-                for e in EMOTION_GROUPS
-            }
+        # ── Signal 2: MediaPipe FaceLandmarker (if available) ────────────────
+        if self._face_landmarker is not None:
+            rgb      = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            lm_result = self._face_landmarker.detect(mp_image)
+            if lm_result.face_landmarks:
+                lm   = lm_result.face_landmarks[0]
+                lm_s = self._landmark_scores(lm)
+                fused = {
+                    e: _FUSION_W[e][0] * fer_g[e] + _FUSION_W[e][1] * lm_s[e]
+                    for e in EMOTION_GROUPS
+                }
+            else:
+                lm_s  = {e: 0.0 for e in EMOTION_GROUPS}
+                fused = fer_g
         else:
+            # FER-only fallback (no geometry signal)
             lm_s  = {e: 0.0 for e in EMOTION_GROUPS}
-            fused = fer_g   # fallback: FER only
+            fused = fer_g
 
         # ── Temporal smoothing + stability vote ───────────────────────────────
         smoothed = self._smooth(fused)

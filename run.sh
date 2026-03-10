@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
-#  MoodBot — One-click launcher for Raspberry Pi / Linux
-#  Installs system deps + Python deps (first run) and starts.
+#  MoodBot — One-click launcher for Raspberry Pi / Linux (uses uv)
+#  Installs system deps + uv + Python deps (first run) and starts.
 # ============================================================
 
 set -e
@@ -24,19 +24,25 @@ if ! command -v espeak-ng &>/dev/null; then
         libjpeg-dev libpng-dev libtiff-dev
 fi
 
-# Create venv if it doesn't exist
-if [ ! -d "venv" ]; then
-    echo "[SETUP] Creating virtual environment..."
-    python3 -m venv venv
+# Install uv if not available
+if ! command -v uv &>/dev/null; then
+    echo "[SETUP] Installing uv package manager..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+
+# Create venv with uv if it doesn't exist
+if [ ! -d ".venv" ]; then
+    echo "[SETUP] Creating virtual environment with uv..."
+    uv venv
 fi
 
 # Activate venv
-source venv/bin/activate
+source .venv/bin/activate
 
 # Install / update Python dependencies
-echo "[SETUP] Installing Python dependencies..."
-pip install --quiet --upgrade pip
-pip install --quiet -r requirements-pi.txt
+echo "[SETUP] Installing Python dependencies with uv..."
+uv pip install -r requirements-pi.txt
 
 # Check .env
 if [ ! -f ".env" ]; then

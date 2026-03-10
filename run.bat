@@ -1,7 +1,7 @@
 @echo off
 :: ============================================================
-::  MoodBot — One-click launcher for Windows
-::  Installs dependencies (first run) and starts the app.
+::  MoodBot — One-click launcher for Windows (uses uv)
+::  Installs uv + dependencies (first run) and starts the app.
 :: ============================================================
 
 echo ============================================
@@ -19,19 +19,25 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: Create venv if it doesn't exist
-if not exist "venv\Scripts\activate.bat" (
-    echo [SETUP] Creating virtual environment...
-    python -m venv venv
+:: Install uv if not available
+where uv >nul 2>&1
+if errorlevel 1 (
+    echo [SETUP] Installing uv package manager...
+    pip install uv
+)
+
+:: Create venv with uv if it doesn't exist
+if not exist ".venv\Scripts\activate.bat" (
+    echo [SETUP] Creating virtual environment with uv...
+    uv venv
 )
 
 :: Activate venv
-call venv\Scripts\activate.bat
+call .venv\Scripts\activate.bat
 
 :: Install / update dependencies
-echo [SETUP] Installing dependencies...
-pip install --quiet --upgrade pip
-pip install --quiet -r requirements.txt
+echo [SETUP] Installing dependencies with uv...
+uv pip install -r requirements.txt
 
 :: Check .env file exists
 if not exist ".env" (
