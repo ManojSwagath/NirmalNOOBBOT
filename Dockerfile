@@ -14,6 +14,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # System dependencies for OpenCV, PyAudio, espeak (TTS), GTK (imshow)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc python3-dev \
     libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
     libgtk-3-0 \
     portaudio19-dev \
