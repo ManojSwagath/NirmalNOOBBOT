@@ -20,6 +20,14 @@ if ! command -v docker &>/dev/null; then
     exit 0
 fi
 
+# If user can't talk to Docker daemon, use newgrp or sudo
+DOCKER_CMD="docker"
+if ! docker info &>/dev/null 2>&1; then
+    echo "[INFO] Adding you to the docker group (needs sudo)..."
+    sudo usermod -aG docker "$USER"
+    DOCKER_CMD="sudo docker"
+fi
+
 # Check .env exists
 if [ ! -f ".env" ]; then
     echo ""
@@ -37,4 +45,4 @@ mkdir -p data
 
 # Build and run
 echo "[BUILD] Building MoodBot Docker image..."
-docker compose up --build
+$DOCKER_CMD compose up --build
