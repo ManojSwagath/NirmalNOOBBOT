@@ -23,6 +23,9 @@ services:
       - XAUTHORITY=/root/.Xauthority
       - PULSE_SERVER=unix:${XDG_RUNTIME_DIR:-/run/user/1000}/pulse/native
       - CAMERA_INDEX=0
+      # Suppress noisy ALSA debug messages
+      - LIBASOUND_DEBUG=none
+      - SDL_AUDIODRIVER=pulseaudio
 
     volumes:
       # X11 socket for GUI window
@@ -31,6 +34,8 @@ services:
       - ${XAUTHORITY:-~/.Xauthority}:/root/.Xauthority:ro
       # PulseAudio / PipeWire-Pulse socket for speaker + mic
       - ${XDG_RUNTIME_DIR:-/run/user/1000}/pulse:${XDG_RUNTIME_DIR:-/run/user/1000}/pulse:rw
+      # PipeWire socket (Pi OS Bookworm uses PipeWire by default)
+      - ${XDG_RUNTIME_DIR:-/run/user/1000}/pipewire-0:${XDG_RUNTIME_DIR:-/run/user/1000}/pipewire-0:rw
       # ALSA sound devices (fallback if PulseAudio unavailable)
       - /dev/snd:/dev/snd
       # Persist emotion memory across container restarts

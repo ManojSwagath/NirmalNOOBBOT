@@ -27,9 +27,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libjpeg-dev libpng-dev libtiff-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Default PulseAudio ALSA routing (host PulseAudio is mounted at runtime)
-RUN echo 'pcm.!default { type pulse }' > /etc/asound.conf \
- && echo 'ctl.!default { type pulse }' >> /etc/asound.conf
+# Default PulseAudio ALSA routing (host PulseAudio/PipeWire is mounted at runtime)
+# Falls back to hw:0 if PulseAudio socket is unavailable
+RUN printf 'pcm.!default {\n  type pulse\n  fallback "sysdefault"\n}\nctl.!default {\n  type pulse\n  fallback "sysdefault"\n}\n' > /etc/asound.conf
+
+# Symlink fonts for OpenCV Qt backend (suppresses QFontDatabase warnings)
+RUN mkdir -p /usr/local/lib/python3.11/site-packages/cv2/qt/fonts \
+ && ln -s /usr/share/fonts/truetype/dejavu/*.ttf /usr/local/lib/python3.11/site-packages/cv2/qt/fonts/ 2>/dev/null || true
 
 # Default camera index — override with CAMERA_INDEX env var at runtime
 ENV CAMERA_INDEX=0
