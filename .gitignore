@@ -25,6 +25,7 @@ Thumbs.db
 
 # Downloaded model (auto-downloaded on first run)
 face_landmarker.task
+*.onnx
 
 # Persisted emotion memory samples
 data/

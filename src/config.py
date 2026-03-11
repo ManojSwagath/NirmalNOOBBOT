@@ -19,8 +19,7 @@ ANALYSE_EVERY_N = 6   if IS_PI else 2
 
 # ── Emotion detection ─────────────────────────────────────────────────────────
 # Grouped confidence needed to accept a reading
-# Lowered to 0.22 — accepts subtler/weaker expressions
-MIN_CONFIDENCE       = 0.22
+MIN_CONFIDENCE       = 0.15
 # Number of recent frames used for majority-vote stability check
 STABLE_FRAMES        = 6
 # Rolling window for temporal score smoothing
@@ -44,7 +43,7 @@ LISTEN_TIMEOUT    = 8     # seconds to wait for speech before giving up
 PHRASE_TIME_LIMIT = 10    # max seconds of a single utterance
 
 # Max back-and-forth AI turns per emotion session
-CONVERSATION_LIMIT = 10
+CONVERSATION_LIMIT = 5
 
 # ── Display ───────────────────────────────────────────────────────────────────
 WINDOW_NAME = "AI Emotion Companion"

@@ -23,7 +23,7 @@ load_dotenv()
 FRAME_WIDTH = 320
 FRAME_HEIGHT = 240
 
-MIN_CONFIDENCE = 0.45   # threshold on the COMBINED group score
+MIN_CONFIDENCE = 0.15   # threshold on the COMBINED group score
 STABLE_FRAMES = 6
 
 EMOTION_BUFFER_SIZE = 10
@@ -36,8 +36,7 @@ TRACKED_EMOTIONS = ["happy", "sad", "angry"]
 EMOTION_GROUPS = {
     "happy": ["happy", "surprise"],          # smiling, excited, open-mouth joy
     "sad":   ["sad",   "fear"],               # crying, worried, scared, downturned
-    "angry": ["angry", "disgust"],            # frowning, frustrated, disgusted
-    # "neutral" is intentionally not mapped — ignored
+    "angry": ["angry", "disgust", "contempt"], # frowning, frustrated, tight-lipped
 }
 
 EMOTION_COLOURS = {
@@ -54,13 +53,20 @@ EMOTION_COLOURS = {
 
 def map_emotion(raw_scores: dict) -> tuple:
     """
-    Fold FER's 7 raw scores into our 3 target groups.
+    Fold FER's 8 raw scores into our 3 target groups.
+    When 'neutral' dominates (>40%), suppress all group scores.
     Returns (target_emotion, combined_confidence) or (None, 0) if
     no group reaches MIN_CONFIDENCE.
     """
+    neutral_score = raw_scores.get("neutral", 0.0)
     group_scores = {}
     for target, members in EMOTION_GROUPS.items():
         group_scores[target] = sum(raw_scores.get(m, 0.0) for m in members)
+
+    # Only suppress when face is strongly neutral (>60%)
+    if neutral_score > 0.6:
+        suppression = max(0.3, 1.0 - neutral_score)
+        group_scores = {e: s * suppression for e, s in group_scores.items()}
 
     best = max(group_scores, key=group_scores.get)
     return best, group_scores[best]
@@ -227,28 +233,59 @@ _ONNX_MODEL_URL = (
 _FERPLUS_LABELS = ("neutral", "happy", "surprise", "sad",
                    "angry", "disgust", "fear", "contempt")
 
+_YUNET_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "face_detection_yunet_2023mar.onnx")
+_YUNET_MODEL_URL = (
+    "https://github.com/opencv/opencv_zoo/raw/main/models/"
+    "face_detection_yunet/face_detection_yunet_2023mar.onnx"
+)
+
 if not os.path.exists(_ONNX_MODEL_PATH):
     os.makedirs(os.path.dirname(_ONNX_MODEL_PATH), exist_ok=True)
     print("Downloading emotion model (~34 MB)\u2026")
     urllib.request.urlretrieve(_ONNX_MODEL_URL, _ONNX_MODEL_PATH)
 
+if not os.path.exists(_YUNET_MODEL_PATH):
+    print("Downloading YuNet face detector (~300 KB)\u2026")
+    urllib.request.urlretrieve(_YUNET_MODEL_URL, _YUNET_MODEL_PATH)
+
 _ort_session = ort.InferenceSession(_ONNX_MODEL_PATH, providers=["CPUExecutionProvider"])
 _ort_input = _ort_session.get_inputs()[0].name
-_face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+_face_detector = cv2.FaceDetectorYN.create(_YUNET_MODEL_PATH, "", (0, 0), 0.6, 0.3)
+_clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
 
 
 def detect_emotions(frame):
-    """Haar cascade face detection + ONNX emotion classification."""
+    """YuNet face detection + CLAHE preprocessing + ONNX emotion classification."""
+    h_frame, w_frame = frame.shape[:2]
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    faces = _face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+
+    _face_detector.setInputSize((w_frame, h_frame))
+    _, raw_faces = _face_detector.detect(frame)
+    if raw_faces is None:
+        return []
+
     results = []
-    for (x, y, w, h) in faces:
-        roi = cv2.resize(gray[y:y+h, x:x+w], (64, 64)).astype(np.float32)
+    for face in raw_faces:
+        x, y, w, h = int(face[0]), int(face[1]), int(face[2]), int(face[3])
+
+        # Add 20% padding around face for better emotion recognition
+        pad_w, pad_h = int(w * 0.2), int(h * 0.2)
+        x1 = max(0, x - pad_w)
+        y1 = max(0, y - pad_h)
+        x2 = min(w_frame, x + w + pad_w)
+        y2 = min(h_frame, y + h + pad_h)
+
+        roi = gray[y1:y2, x1:x2]
+        if roi.size == 0:
+            continue
+
+        roi = _clahe.apply(roi)
+        roi = cv2.resize(roi, (64, 64)).astype(np.float32)
         logits = _ort_session.run(None, {_ort_input: roi.reshape(1, 1, 64, 64)})[0][0]
         probs = np.exp(logits - logits.max())
         probs /= probs.sum()
         emotions = {_FERPLUS_LABELS[i]: float(probs[i]) for i in range(len(_FERPLUS_LABELS))}
-        results.append({"box": [int(x), int(y), int(w), int(h)], "emotions": emotions})
+        results.append({"box": [x, y, w, h], "emotions": emotions})
     return results
 
 

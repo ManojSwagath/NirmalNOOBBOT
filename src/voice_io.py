@@ -143,8 +143,7 @@ def listen(groq_client, whisper_model: str,
     """
     recognizer = sr.Recognizer()
     recognizer.dynamic_energy_threshold = True
-    # Raise the energy threshold so faint speaker bleed-through is ignored
-    recognizer.energy_threshold = 300
+    recognizer.energy_threshold = 150
 
     # ── Step 1: capture microphone audio ─────────────────────────────────────
     mic_index = None if IS_WINDOWS else _find_webcam_mic()
@@ -166,7 +165,7 @@ def listen(groq_client, whisper_model: str,
     # ── Step 1b: energy gate — skip transcription if audio is near-silent ────
     wav_data = audio.get_wav_data()
     rms = _audio_rms(wav_data)
-    if rms < 200:
+    if rms < 80:
         print(f"[LISTENING] Audio too quiet (RMS={rms:.0f}) — skipping transcription.")
         return ""
 

@@ -69,9 +69,15 @@ _ONNX_MODEL_URL  = (
     "https://github.com/onnx/models/raw/main/"
     "validated/vision/body_analysis/emotion_ferplus/model/emotion-ferplus-8.onnx"
 )
-_HAAR_CASCADE = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
 _FERPLUS_LABELS = ("neutral", "happy", "surprise", "sad",
                    "angry", "disgust", "fear", "contempt")
+
+# YuNet face detector model (~300 KB, far more accurate than Haar cascade)
+_YUNET_MODEL_PATH = os.path.join(os.path.dirname(__file__), "face_detection_yunet_2023mar.onnx")
+_YUNET_MODEL_URL  = (
+    "https://github.com/opencv/opencv_zoo/raw/main/models/"
+    "face_detection_yunet/face_detection_yunet_2023mar.onnx"
+)
 
 def _ensure_onnx_model() -> str:
     """Download the emotion ONNX model on first run (~34 MB)."""
@@ -81,11 +87,19 @@ def _ensure_onnx_model() -> str:
         print("[DETECTOR] Download complete.")
     return _ONNX_MODEL_PATH
 
+def _ensure_yunet_model() -> str:
+    """Download the YuNet face detection model on first run (~300 KB)."""
+    if not os.path.exists(_YUNET_MODEL_PATH):
+        print("[DETECTOR] Downloading YuNet face detector (~300 KB)\u2026")
+        urllib.request.urlretrieve(_YUNET_MODEL_URL, _YUNET_MODEL_PATH)
+        print("[DETECTOR] Download complete.")
+    return _YUNET_MODEL_PATH
+
 # ── Emotion grouping ──────────────────────────────────────────────────────────
 EMOTION_GROUPS: dict[str, list[str]] = {
-    "happy": ["happy", "surprise"],  # FER classifies wide smiles as "surprise"
-    "sad":   ["sad",   "fear"],
-    "angry": ["angry", "disgust"],
+    "happy": ["happy", "surprise"],          # wide smiles + excited
+    "sad":   ["sad",   "fear"],               # downturned + worried
+    "angry": ["angry", "disgust", "contempt"], # frowning + frustrated + tight-lipped
 }
 
 EMOTION_COLOURS: dict[str, tuple] = {
@@ -166,7 +180,13 @@ class EmotionDetector:
             _ONNX_MODEL_PATH, providers=["CPUExecutionProvider"],
         )
         self._ort_input_name = self._ort_session.get_inputs()[0].name
-        self._face_cascade   = cv2.CascadeClassifier(_HAAR_CASCADE)
+
+        # YuNet face detector (much more accurate than Haar cascade)
+        _ensure_yunet_model()
+        self._face_detector = cv2.FaceDetectorYN.create(
+            _YUNET_MODEL_PATH, "", (0, 0), 0.6, 0.3,
+        )
+        self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
         self._stable_frames  = stable_frames
         self._min_conf      = min_confidence
 
@@ -229,18 +249,38 @@ class EmotionDetector:
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _detect_emotions(self, frame) -> list[dict]:
-        """Detect faces via Haar cascade, classify emotions via ONNX model.
+        """Detect faces via YuNet, classify emotions via ONNX model.
         Returns list matching old FER format:
           [{"box": [x,y,w,h], "emotions": {"angry": ..., "happy": ..., ...}}]
         """
+        h_frame, w_frame = frame.shape[:2]
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = self._face_cascade.detectMultiScale(
-            gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30),
-        )
+
+        # YuNet face detection
+        self._face_detector.setInputSize((w_frame, h_frame))
+        _, raw_faces = self._face_detector.detect(frame)
+        if raw_faces is None:
+            return []
+
         results = []
-        for (x, y, w, h) in faces:
-            roi = gray[y:y+h, x:x+w]
+        for face in raw_faces:
+            x, y, w, h = int(face[0]), int(face[1]), int(face[2]), int(face[3])
+
+            # Add 20% padding around face for better emotion recognition
+            pad_w, pad_h = int(w * 0.2), int(h * 0.2)
+            x1 = max(0, x - pad_w)
+            y1 = max(0, y - pad_h)
+            x2 = min(w_frame, x + w + pad_w)
+            y2 = min(h_frame, y + h + pad_h)
+
+            roi = gray[y1:y2, x1:x2]
+            if roi.size == 0:
+                continue
+
+            # CLAHE contrast normalization — handles different lighting
+            roi = self._clahe.apply(roi)
             roi = cv2.resize(roi, (64, 64)).astype(np.float32)
+
             logits = self._ort_session.run(
                 None, {self._ort_input_name: roi.reshape(1, 1, 64, 64)}
             )[0][0]
@@ -248,16 +288,23 @@ class EmotionDetector:
             probs /= probs.sum()
             emotions = {_FERPLUS_LABELS[i]: float(probs[i])
                         for i in range(len(_FERPLUS_LABELS))}
-            results.append({"box": [int(x), int(y), int(w), int(h)],
-                            "emotions": emotions})
+            results.append({"box": [x, y, w, h], "emotions": emotions})
         return results
 
     def _group_fer(self, raw: dict) -> dict[str, float]:
-        """Collapse FER's 7 raw scores into 3 target-emotion scores."""
-        return {
+        """Collapse FER's 8 raw scores into 3 target-emotion scores.
+        When 'neutral' dominates (>60%), scale down all group scores
+        so neutral faces don't falsely trigger emotions."""
+        neutral_score = raw.get("neutral", 0.0)
+        grouped = {
             t: sum(raw.get(s, 0.0) for s in members)
             for t, members in EMOTION_GROUPS.items()
         }
+        # Only suppress when face is overwhelmingly neutral (>70%)
+        if neutral_score > 0.7:
+            suppression = max(0.4, 1.0 - neutral_score)  # floor at 0.4
+            grouped = {e: s * suppression for e, s in grouped.items()}
+        return grouped
 
     def _load_memory(self) -> None:
         """Load saved emotion samples from disk and rebuild centroids on startup."""

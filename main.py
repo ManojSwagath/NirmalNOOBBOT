@@ -199,7 +199,7 @@ def draw_overlay(frame, detection: dict, talking: bool,
     elif talking:
         status, col = "[ TALKING... ]", (200, 200, 200)
     else:
-        status = "H=Happy  S=Sad  A=Angry  N=reset  |  Q=quit"
+        status = "H=Happy  S=Sad  A=Angry  N=Reset  Q=Quit"
         col    = (160, 160, 160)
     cv2.putText(frame, status, (10, h_frame - 10),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, 1, cv2.LINE_AA)
@@ -228,6 +228,7 @@ def run_conversation(emotion: str, groq_client: Groq,
 
             # Back-and-forth conversation
             history: list = []
+            silent_strikes = 0
             for turn in range(CONVERSATION_LIMIT):
                 print(f"\n{'='*60}")
                 print(f"  Turn {turn + 1} of {CONVERSATION_LIMIT}  |  Emotion: {emotion.upper()}")
@@ -235,16 +236,17 @@ def run_conversation(emotion: str, groq_client: Groq,
                 user_text = listen(groq_client, WHISPER_MODEL,
                                    LISTEN_TIMEOUT, PHRASE_TIME_LIMIT)
                 if not user_text:
-                    speak("I'm here whenever you're ready. Take care!", TTS_RATE)
-                    break
+                    silent_strikes += 1
+                    if silent_strikes >= 2:
+                        break
+                    print("[CONVO] No speech detected, waiting for next turn...")
+                    continue
 
+                silent_strikes = 0
                 history.append({"role": "user", "content": user_text})
                 reply = get_ai_reply(groq_client, history, GROQ_MODEL, emotion)
                 history.append({"role": "assistant", "content": reply})
                 speak(reply, TTS_RATE)
-
-                if turn == CONVERSATION_LIMIT - 1:
-                    speak("It was lovely talking with you. Take care!", TTS_RATE)
 
         except Exception as exc:
             print(f"[CONVO ERROR] {exc}")
@@ -282,6 +284,8 @@ def main() -> None:
     feedback_msg      = ""      # on-screen confirmation message
     feedback_msg_time = 0.0     # timestamp when feedback_msg was set
     auto_conf_start: dict = {}  # tracks passive auto-confirm timing {emotion, t}
+    forced_emotion: str | None = None   # manual override via H/S/A keys
+    forced_emotion_time = 0.0           # when the override was set
 
     print("\n" + "=" * 52)
     print("  AI Emotion Companion — Running")
@@ -299,10 +303,22 @@ def main() -> None:
 
             frame_count += 1
 
+            # ── Check forced emotion timeout (5 seconds) ──────────────────
+            if forced_emotion and (time.time() - forced_emotion_time > 5.0):
+                forced_emotion = None
+
             # ── Emotion detection (every Nth frame) ──────────────────────────
             if frame_count % ANALYSE_EVERY_N == 0:
                 detection = detector.process_frame(frame)
-                stable    = detection.get("stable_emotion")
+
+                # Use forced emotion if active, otherwise use detector
+                if forced_emotion:
+                    stable = forced_emotion
+                    detection["stable_emotion"] = forced_emotion
+                    detection["raw_emotion"]    = forced_emotion
+                    detection["confidence"]     = 1.0
+                else:
+                    stable = detection.get("stable_emotion")
 
                 if detection.get("box") is not None:
                     last_no_face_time = time.time()
@@ -368,28 +384,26 @@ def main() -> None:
                 break
 
             elif key in (ord("h"), ord("H")):
-                if detector.confirm_detection("happy"):
-                    feedback_msg      = f"HAPPY confirmed  ({detector.confirmed_counts['happy']} samples)"
-                    feedback_msg_time = time.time()
-                    print(f"[CONFIRM] happy  ({detector.confirmed_counts['happy']} samples)")
+                forced_emotion      = "happy"
+                forced_emotion_time = time.time()
+                last_spoken         = None
+                emotion_hold_time   = time.time()
 
             elif key in (ord("s"), ord("S")):
-                if detector.confirm_detection("sad"):
-                    feedback_msg      = f"SAD confirmed  ({detector.confirmed_counts['sad']} samples)"
-                    feedback_msg_time = time.time()
-                    print(f"[CONFIRM] sad    ({detector.confirmed_counts['sad']} samples)")
+                forced_emotion      = "sad"
+                forced_emotion_time = time.time()
+                last_spoken         = None
+                emotion_hold_time   = time.time()
 
             elif key in (ord("a"), ord("A")):
-                if detector.confirm_detection("angry"):
-                    feedback_msg      = f"ANGRY confirmed  ({detector.confirmed_counts['angry']} samples)"
-                    feedback_msg_time = time.time()
-                    print(f"[CONFIRM] angry  ({detector.confirmed_counts['angry']} samples)")
+                forced_emotion      = "angry"
+                forced_emotion_time = time.time()
+                last_spoken         = None
+                emotion_hold_time   = time.time()
 
             elif key in (ord("n"), ord("N")):
+                forced_emotion = None
                 detector.reset_votes()
-                feedback_msg      = "Votes reset"
-                feedback_msg_time = time.time()
-                print("[INFO] Votes reset")
 
     except KeyboardInterrupt:
         print("[INFO] Interrupted.")
