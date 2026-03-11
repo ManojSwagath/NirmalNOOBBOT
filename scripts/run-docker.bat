@@ -2,14 +2,14 @@
 :: ============================================================
 ::  MoodBot — Docker launcher for Windows
 ::  Requires: Docker Desktop + VcXsrv (for display)
-::  Usage:  git clone <repo> && cd NirmalNOOBBOT && run-docker.bat
+::  Usage:  git clone <repo> && cd NirmalNOOBBOT && scripts\run-docker.bat
 :: ============================================================
 
 echo ============================================
 echo   MoodBot — Docker Launch (Windows)
 echo ============================================
 
-cd /d "%~dp0"
+cd /d "%~dp0\.."
 
 :: Check Docker is available
 docker --version >nul 2>&1

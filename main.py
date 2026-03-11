@@ -40,7 +40,7 @@ from dotenv import load_dotenv
 from groq import Groq
 
 load_dotenv()
-from config import (
+from src.config import (
     IS_WINDOWS, IS_PI,
     FRAME_WIDTH, FRAME_HEIGHT, ANALYSE_EVERY_N,
     EMOTION_HOLD_SECONDS, EMOTION_HISTORY_SIZE,
@@ -51,9 +51,9 @@ from config import (
     MIN_CONFIDENCE,
     CAMERA_INDEX,
 )
-from emotion_detector import EmotionDetector, EMOTION_COLOURS
-from voice_io import speak, listen
-from ai_companion import get_greeting, get_long_duration_message, get_ai_reply
+from src.emotion_detector import EmotionDetector, EMOTION_COLOURS
+from src.voice_io import speak, listen
+from src.ai_companion import get_greeting, get_long_duration_message, get_ai_reply
 
 # ── Camera ─────────────────────────────────────────────────────────────────────
 

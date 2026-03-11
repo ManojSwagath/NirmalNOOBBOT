@@ -5,6 +5,8 @@ from groq import Groq
 from collections import deque
 import tempfile
 import os
+import re
+import struct
 import time
 import threading
 import pyttsx3
@@ -73,6 +75,31 @@ groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 # Each call creates its own engine so it works safely from any thread
 # -----------------------------
 
+# ── Whisper hallucination filter ──────────────────────────────────────────────
+_HALLUCINATION_PHRASES = frozenset({
+    "thank you", "thanks for watching", "thank you for watching",
+    "subscribe", "like and subscribe", "please subscribe",
+    "thank you for listening", "thanks for listening",
+    "bye", "goodbye", "see you next time", "you", "the end", "so",
+    "i'm sorry", "",
+})
+
+def _is_hallucination(text: str) -> bool:
+    cleaned = re.sub(r"[^\w\s]", "", text.lower()).strip()
+    if cleaned in _HALLUCINATION_PHRASES:
+        return True
+    if len(cleaned.split()) <= 1 and len(cleaned) < 4:
+        return True
+    return False
+
+def _audio_rms(wav_data: bytes) -> float:
+    pcm = wav_data[44:]
+    if len(pcm) < 2:
+        return 0.0
+    n_samples = len(pcm) // 2
+    samples = struct.unpack(f"<{n_samples}h", pcm[:n_samples * 2])
+    return (sum(s * s for s in samples) / n_samples) ** 0.5
+
 def speak(text):
     print("AI:", text)
     engine = pyttsx3.init()
@@ -80,6 +107,7 @@ def speak(text):
     engine.say(text)
     engine.runAndWait()
     engine.stop()
+    time.sleep(0.6)
 
 # -----------------------------
 # SPEECH RECOGNITION
@@ -89,10 +117,12 @@ recognizer = sr.Recognizer()
 
 def listen():
 
+    recognizer.energy_threshold = 300
+
     with sr.Microphone() as source:
 
         print("Listening...")
-        recognizer.adjust_for_ambient_noise(source, duration=0.5)
+        recognizer.adjust_for_ambient_noise(source, duration=1.0)
 
         try:
             audio = recognizer.listen(source, timeout=5, phrase_time_limit=8)
@@ -100,8 +130,14 @@ def listen():
             print("No speech detected.")
             return ""
 
+    wav_data = audio.get_wav_data()
+    rms = _audio_rms(wav_data)
+    if rms < 200:
+        print(f"Audio too quiet (RMS={rms:.0f}) — skipping.")
+        return ""
+
     with tempfile.NamedTemporaryFile(suffix=".wav",delete=False) as tmp:
-        tmp.write(audio.get_wav_data())
+        tmp.write(wav_data)
         path = tmp.name
 
     try:
@@ -111,6 +147,9 @@ def listen():
                 file=("speech.wav", f, "audio/wav")
             )
         text = result.text.strip()
+        if _is_hallucination(text):
+            print(f"Filtered hallucination: \"{text}\"")
+            return ""
         print("User:", text)
         return text
     except Exception as exc:

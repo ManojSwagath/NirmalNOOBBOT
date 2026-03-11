@@ -2,11 +2,11 @@
 # ============================================================
 #  MoodBot — One-click launcher for Raspberry Pi / Linux
 #  Installs system deps + Python deps (first run) and starts.
-#  Usage:  git clone <repo> && cd NirmalNOOBBOT && bash run.sh
+#  Usage:  git clone <repo> && cd NirmalNOOBBOT && bash scripts/run.sh
 # ============================================================
 
 set -e
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 echo "============================================"
 echo "  MoodBot — AI Emotion Companion"

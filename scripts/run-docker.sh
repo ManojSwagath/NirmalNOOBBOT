@@ -4,17 +4,17 @@
 #
 #  ONE-LINE SETUP (paste into your Raspberry Pi terminal):
 #
-#    git clone https://github.com/nani378/NirmalNOOBBOT.git && \
+#    git clone https://github.com/ManojSwagath/NirmalNOOBBOT.git && \
 #      cd NirmalNOOBBOT && \
 #      echo 'GROQ_API_KEY=your_key_here' > .env && \
-#      bash run-docker.sh
+#      bash scripts/run-docker.sh
 #
 #  If you already cloned and want to update:
-#    cd NirmalNOOBBOT && git pull && bash run-docker.sh
+#    cd NirmalNOOBBOT && git pull && bash scripts/run-docker.sh
 # ============================================================
 
 set -e
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 echo "============================================"
 echo "  MoodBot — Docker Launch"

@@ -43,7 +43,7 @@ except ImportError:
     _HAS_MEDIAPIPE = False
 from collections import deque
 from fer.fer import FER
-from config import EMOTION_BUFFER_SIZE, STABLE_FRAMES, MIN_CONFIDENCE, MEMORY_DATA_DIR
+from src.config import EMOTION_BUFFER_SIZE, STABLE_FRAMES, MIN_CONFIDENCE, MEMORY_DATA_DIR
 
 # ── Face Landmarker model (Tasks API) ─────────────────────────────────────────
 _MODEL_PATH = os.path.join(os.path.dirname(__file__), "face_landmarker.task")

@@ -1,5 +1,5 @@
 # ============================================================
-#  MoodBot — Docker image
+#  MoodBot — Docker image (multi-arch: amd64 + arm64/Pi)
 #  Provides camera, microphone, display, and speaker access
 #  for real-time emotion detection + AI companion.
 #
@@ -14,7 +14,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # System dependencies for OpenCV, PyAudio, espeak (TTS), GTK (imshow), audio, fonts
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc python3-dev \
+    gcc g++ python3-dev \
     libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
     libgtk-3-0 \
     portaudio19-dev \
@@ -23,6 +23,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     alsa-utils libasound2-plugins \
     fonts-dejavu-core \
     v4l-utils \
+    libatlas-base-dev libhdf5-dev \
+    libjpeg-dev libpng-dev libtiff-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Default PulseAudio ALSA routing (host PulseAudio is mounted at runtime)
@@ -35,11 +37,13 @@ ENV CAMERA_INDEX=0
 WORKDIR /app
 
 # Install Python deps first (layer caching)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Uses Pi-compatible requirements (works on all platforms)
+COPY requirements-pi.txt .
+RUN pip install --no-cache-dir -r requirements-pi.txt
 
 # Copy application code
-COPY config.py emotion_detector.py voice_io.py ai_companion.py main.py ./
+COPY src/ ./src/
+COPY main.py mains.py ./
 
 # Create data directory for persistent memory
 RUN mkdir -p data

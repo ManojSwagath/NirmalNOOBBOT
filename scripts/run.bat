@@ -2,15 +2,15 @@
 :: ============================================================
 ::  MoodBot — One-click launcher for Windows
 ::  Creates venv, installs deps (first run), and starts the app.
-::  Usage:  git clone <repo> && cd NirmalNOOBBOT && run.bat
+::  Usage:  git clone <repo> && cd NirmalNOOBBOT && scripts\run.bat
 :: ============================================================
 
 echo ============================================
 echo   MoodBot — AI Emotion Companion
 echo ============================================
 
-:: Move to the script's own directory
-cd /d "%~dp0"
+:: Move to the project root (one level up from scripts/)
+cd /d "%~dp0\.."
 
 :: Check Python is available
 python --version >nul 2>&1
