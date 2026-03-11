@@ -6,14 +6,9 @@ __pycache__/
 .git/
 .gitignore
 *.md
-run.bat
-run.sh
-run-docker.bat
-run-docker.sh
 data/
 .env.example
 mains.py
-test_speech.py
 tests/
 scripts/
 docs/
