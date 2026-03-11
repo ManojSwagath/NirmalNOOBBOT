@@ -2,49 +2,71 @@
 # ============================================================
 #  MoodBot — Docker launcher for Linux / Raspberry Pi
 #
-#  ONE-LINE SETUP (paste into your Raspberry Pi terminal):
+#  ONE-LINE SETUP (paste into terminal):
 #
-#    git clone https://github.com/ManojSwagath/NirmalNOOBBOT.git && \
-#      cd NirmalNOOBBOT && \
-#      echo 'GROQ_API_KEY=your_key_here' > .env && \
-#      bash scripts/run-docker.sh
+#    git clone https://github.com/ManojSwagath/NirmalNOOBBOT.git && cd NirmalNOOBBOT && bash scripts/run-docker.sh YOUR_GROQ_API_KEY
 #
-#  If you already cloned and want to update:
-#    cd NirmalNOOBBOT && git pull && bash scripts/run-docker.sh
+#  Nothing is installed on your system except Docker.
+#  Everything runs inside the container.
 # ============================================================
 
 set -e
 cd "$(dirname "$0")/.."
 
+GROQ_KEY="${1:-}"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+echo ""
 echo "============================================"
 echo "  MoodBot — Docker Launch"
 echo "============================================"
+echo ""
 
-# Check Docker is installed
+# ── 1. Install Docker if missing ─────────────────────────────────────────────
+
 if ! command -v docker &>/dev/null; then
-    echo "[SETUP] Docker not found. Installing..."
+    echo -e "${YELLOW}[SETUP] Docker not found. Installing...${NC}"
     curl -fsSL https://get.docker.com | sh
     sudo usermod -aG docker "$USER"
-    echo "[INFO] Docker installed. Log out and back in, then re-run this script."
+    echo -e "${GREEN}[SETUP] Docker installed.${NC}"
+    echo -e "${YELLOW}[INFO] You need to log out and log back in (or reboot) for Docker permissions.${NC}"
+    echo "  Then run:  bash scripts/run-docker.sh $GROQ_KEY"
     exit 0
 fi
 
-# If user can't talk to Docker daemon, use newgrp or sudo
-DOCKER_CMD="docker"
+# If user can't talk to Docker daemon, add to group
 if ! docker info &>/dev/null 2>&1; then
-    echo "[INFO] Adding you to the docker group (needs sudo)..."
+    echo -e "${YELLOW}[INFO] Adding you to the docker group (needs sudo)...${NC}"
     sudo usermod -aG docker "$USER"
-    DOCKER_CMD="sudo docker"
+    echo -e "${YELLOW}[INFO] Log out and back in, then re-run this script.${NC}"
+    exit 0
 fi
 
-# Check .env exists
-if [ ! -f ".env" ]; then
+# ── 2. GROQ API key ──────────────────────────────────────────────────────────
+
+if [ -n "$GROQ_KEY" ]; then
+    echo "GROQ_API_KEY=$GROQ_KEY" > .env
+    echo -e "${GREEN}[OK] API key saved to .env${NC}"
+elif [ ! -f ".env" ]; then
     echo ""
-    echo "[ERROR] .env file not found!"
-    echo "  Create it with:  echo 'GROQ_API_KEY=your_key_here' > .env"
+    echo -e "${RED}[MISSING] GROQ API key not provided!${NC}"
     echo ""
-    exit 1
+    read -rp "  Paste your GROQ_API_KEY: " key
+    if [ -z "$key" ]; then
+        echo -e "${RED}  No key entered. Get one at https://console.groq.com${NC}"
+        exit 1
+    fi
+    echo "GROQ_API_KEY=$key" > .env
+    echo -e "${GREEN}  Saved to .env${NC}"
+else
+    echo -e "${GREEN}[OK] API key already configured.${NC}"
 fi
+
+# ── 3. X11 + Audio setup ─────────────────────────────────────────────────────
 
 # Allow X11 connections from Docker containers
 xhost +local: 2>/dev/null || true
@@ -52,20 +74,16 @@ xhost +local: 2>/dev/null || true
 # Create data dir for persistent memory
 mkdir -p data
 
-# Export DISPLAY so sudo docker can see it
 export DISPLAY=${DISPLAY:-:0}
 export XAUTHORITY=${XAUTHORITY:-$HOME/.Xauthority}
 
-# Set up PulseAudio for speaker/mic passthrough into Docker
+# PulseAudio for speaker/mic passthrough
 mkdir -p ~/.config/pulse
 pactl load-module module-native-protocol-unix auth-anonymous=1 2>/dev/null || true
-echo "[AUDIO] Available audio sources (microphones):"
-pactl list short sources 2>/dev/null || echo "  (pactl not available)"
 
-# List detected cameras
-echo "[CAMERA] Detected video devices:"
-ls /dev/video* 2>/dev/null || echo "  (no /dev/video* found)"
+# ── 4. Build and run ─────────────────────────────────────────────────────────
 
-# Build and run
-echo "[BUILD] Building MoodBot Docker image..."
-$DOCKER_CMD compose up --build
+echo ""
+echo -e "${GREEN}[BUILD] Building Docker image (first time takes a few minutes)...${NC}"
+echo ""
+docker compose up --build
