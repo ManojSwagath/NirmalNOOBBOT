@@ -43,7 +43,7 @@ RUN pip install --no-cache-dir -r requirements-pi.txt
 
 # Copy application code
 COPY src/ ./src/
-COPY main.py mains.py ./
+COPY main.py ./
 
 # Create data directory for persistent memory
 RUN mkdir -p data
