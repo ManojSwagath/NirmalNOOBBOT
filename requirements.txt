@@ -11,8 +11,8 @@
 # --- Computer Vision ---
 opencv-python>=4.8.0            # Webcam capture + face overlay display
 
-# --- Emotion Detection (pretrained CNN, lightweight) ---
-fer>=22.5.1                     # Facial Emotion Recognition — wraps a small Keras CNN
+# --- Emotion Detection (ONNX Runtime, lightweight ~50 MB) ---
+onnxruntime>=1.15.0             # Runs emotion-ferplus CNN without TensorFlow
 
 # --- Text-to-Speech (offline, no API key needed) ---
 pyttsx3>=2.98                   # Cross-platform TTS (SAPI5 on Windows, espeak on Linux)

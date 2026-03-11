@@ -42,7 +42,7 @@ try:
 except ImportError:
     _HAS_MEDIAPIPE = False
 from collections import deque
-from fer.fer import FER
+import onnxruntime as ort
 from src.config import EMOTION_BUFFER_SIZE, STABLE_FRAMES, MIN_CONFIDENCE, MEMORY_DATA_DIR
 
 # ── Face Landmarker model (Tasks API) ─────────────────────────────────────────
@@ -62,6 +62,24 @@ def _ensure_model() -> str | None:
         urllib.request.urlretrieve(_MODEL_URL, _MODEL_PATH)
         print("[DETECTOR] Download complete.")
     return _MODEL_PATH
+
+# ── ONNX emotion model (replaces fer + tensorflow) ───────────────────────────
+_ONNX_MODEL_PATH = os.path.join(os.path.dirname(__file__), "emotion-ferplus-8.onnx")
+_ONNX_MODEL_URL  = (
+    "https://github.com/onnx/models/raw/main/"
+    "validated/vision/body_analysis/emotion_ferplus/model/emotion-ferplus-8.onnx"
+)
+_HAAR_CASCADE = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+_FERPLUS_LABELS = ("neutral", "happy", "surprise", "sad",
+                   "angry", "disgust", "fear", "contempt")
+
+def _ensure_onnx_model() -> str:
+    """Download the emotion ONNX model on first run (~34 MB)."""
+    if not os.path.exists(_ONNX_MODEL_PATH):
+        print("[DETECTOR] Downloading emotion ONNX model (~34 MB)\u2026")
+        urllib.request.urlretrieve(_ONNX_MODEL_URL, _ONNX_MODEL_PATH)
+        print("[DETECTOR] Download complete.")
+    return _ONNX_MODEL_PATH
 
 # ── Emotion grouping ──────────────────────────────────────────────────────────
 EMOTION_GROUPS: dict[str, list[str]] = {
@@ -142,9 +160,14 @@ class EmotionDetector:
         stable_frames:  int   = STABLE_FRAMES,
         min_confidence: float = MIN_CONFIDENCE,
     ):
-        print("[DETECTOR] Loading FER model…")
-        self._fer           = FER(mtcnn=False)
-        self._stable_frames = stable_frames
+        print("[DETECTOR] Loading emotion model\u2026")
+        _ensure_onnx_model()
+        self._ort_session    = ort.InferenceSession(
+            _ONNX_MODEL_PATH, providers=["CPUExecutionProvider"],
+        )
+        self._ort_input_name = self._ort_session.get_inputs()[0].name
+        self._face_cascade   = cv2.CascadeClassifier(_HAAR_CASCADE)
+        self._stable_frames  = stable_frames
         self._min_conf      = min_confidence
 
         # ── MediaPipe (optional — not available on aarch64/Pi) ────────────────
@@ -204,6 +227,30 @@ class EmotionDetector:
         print("[DETECTOR] Ready \u2014 look neutral at the camera to calibrate…")
 
     # ── Private helpers ───────────────────────────────────────────────────────
+
+    def _detect_emotions(self, frame) -> list[dict]:
+        """Detect faces via Haar cascade, classify emotions via ONNX model.
+        Returns list matching old FER format:
+          [{"box": [x,y,w,h], "emotions": {"angry": ..., "happy": ..., ...}}]
+        """
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = self._face_cascade.detectMultiScale(
+            gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30),
+        )
+        results = []
+        for (x, y, w, h) in faces:
+            roi = gray[y:y+h, x:x+w]
+            roi = cv2.resize(roi, (64, 64)).astype(np.float32)
+            logits = self._ort_session.run(
+                None, {self._ort_input_name: roi.reshape(1, 1, 64, 64)}
+            )[0][0]
+            probs = np.exp(logits - logits.max())
+            probs /= probs.sum()
+            emotions = {_FERPLUS_LABELS[i]: float(probs[i])
+                        for i in range(len(_FERPLUS_LABELS))}
+            results.append({"box": [int(x), int(y), int(w), int(h)],
+                            "emotions": emotions})
+        return results
 
     def _group_fer(self, raw: dict) -> dict[str, float]:
         """Collapse FER's 7 raw scores into 3 target-emotion scores."""
@@ -475,7 +522,7 @@ class EmotionDetector:
         }
 
         # ── Signal 1: FER CNN ─────────────────────────────────────────────────
-        detections = self._fer.detect_emotions(frame)
+        detections = self._detect_emotions(frame)
         if not detections:
             return null
 

@@ -1,5 +1,7 @@
 import cv2
-from fer.fer import FER
+import numpy as np
+import urllib.request
+import onnxruntime as ort
 import speech_recognition as sr
 from groq import Groq
 from collections import deque
@@ -214,10 +216,41 @@ def run_conversation(emotion, hist_snapshot):
 
 
 # -----------------------------
-# FER EMOTION MODEL
+# EMOTION MODEL (ONNX — no TensorFlow needed)
 # -----------------------------
 
-detector = FER(mtcnn=False)
+_ONNX_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "emotion-ferplus-8.onnx")
+_ONNX_MODEL_URL = (
+    "https://github.com/onnx/models/raw/main/"
+    "validated/vision/body_analysis/emotion_ferplus/model/emotion-ferplus-8.onnx"
+)
+_FERPLUS_LABELS = ("neutral", "happy", "surprise", "sad",
+                   "angry", "disgust", "fear", "contempt")
+
+if not os.path.exists(_ONNX_MODEL_PATH):
+    os.makedirs(os.path.dirname(_ONNX_MODEL_PATH), exist_ok=True)
+    print("Downloading emotion model (~34 MB)\u2026")
+    urllib.request.urlretrieve(_ONNX_MODEL_URL, _ONNX_MODEL_PATH)
+
+_ort_session = ort.InferenceSession(_ONNX_MODEL_PATH, providers=["CPUExecutionProvider"])
+_ort_input = _ort_session.get_inputs()[0].name
+_face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+
+
+def detect_emotions(frame):
+    """Haar cascade face detection + ONNX emotion classification."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = _face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+    results = []
+    for (x, y, w, h) in faces:
+        roi = cv2.resize(gray[y:y+h, x:x+w], (64, 64)).astype(np.float32)
+        logits = _ort_session.run(None, {_ort_input: roi.reshape(1, 1, 64, 64)})[0][0]
+        probs = np.exp(logits - logits.max())
+        probs /= probs.sum()
+        emotions = {_FERPLUS_LABELS[i]: float(probs[i]) for i in range(len(_FERPLUS_LABELS))}
+        results.append({"box": [int(x), int(y), int(w), int(h)], "emotions": emotions})
+    return results
+
 
 # -----------------------------
 # CAMERA
@@ -249,7 +282,7 @@ while True:
         break
 
     # --- Emotion detection ---
-    detections = detector.detect_emotions(frame)
+    detections = detect_emotions(frame)
 
     if detections:
         top      = detections[0]

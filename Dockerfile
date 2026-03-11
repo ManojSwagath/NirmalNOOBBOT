@@ -42,7 +42,7 @@ COPY requirements-pi.txt .
 RUN pip install --no-cache-dir -r requirements-pi.txt
 
 # Install mediapipe on amd64 (not available on arm64/Pi)
-# Gives dual-signal emotion detection (FER + face geometry fusion)
+# Gives dual-signal emotion detection (ONNX emotion model + face geometry fusion)
 RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
         pip install --no-cache-dir mediapipe>=0.10.0; \
     fi
