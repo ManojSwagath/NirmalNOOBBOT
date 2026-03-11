@@ -23,7 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     alsa-utils libasound2-plugins \
     fonts-dejavu-core \
     v4l-utils \
-    libatlas-base-dev libhdf5-dev \
+    liblapack-dev libblas-dev libhdf5-dev \
     libjpeg-dev libpng-dev libtiff-dev \
     && rm -rf /var/lib/apt/lists/*
 
